@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: v6.3 (Camera Visibility & Gestures Fixed) */
+/* script.js - Jewels-Ai Atelier: v5.2 (Fix: Carousel & Hosting) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -34,10 +34,10 @@ let isProcessingHand = false, isProcessingFace = false;
 /* Tracking Variables */
 let currentAssetName = "Select a Design"; 
 let currentAssetIndex = 0; 
-let currentCameraMode = 'user'; 
 
 /* Physics State */
 let physics = { earringAngle: 0, earringVelocity: 0, swayOffset: 0, lastHeadX: 0 };
+let currentCameraMode = 'user'; 
 
 /* Auto Try State */
 let autoTryRunning = false;
@@ -46,7 +46,7 @@ let autoTryIndex = 0;
 let autoTryTimeout = null;
 let currentPreviewData = { url: null, name: 'Jewels-Ai_look.png' }; 
 
-/* Stabilizer & Gesture Variables */
+/* Stabilizer Variables */
 const SMOOTH_FACTOR = 0.8; 
 let handSmoother = {
     active: false,
@@ -54,29 +54,34 @@ let handSmoother = {
     bangle: { x: 0, y: 0, angle: 0, size: 0 }
 };
 
-// GESTURE TRACKING
-let lastGestureTime = 0;
-const GESTURE_COOLDOWN = 800; // 0.8 Seconds between swipes
-let previousHandX = null;
-
-/* --- CO-SHOPPING ENGINE --- */
+/* --- CO-SHOPPING (MULTIPLAYER) ENGINE --- */
 const coShop = {
-    peer: null, conn: null, myId: null, active: false, isHost: false, 
+    peer: null,
+    conn: null,
+    myId: null,
+    active: false,
+    isHost: false, 
 
     init: function() {
-        this.peer = new Peer(null, { debug: 1 });
+        this.peer = new Peer(null, { debug: 2 });
+        
         this.peer.on('open', (id) => {
             this.myId = id;
             console.log("My Peer ID: " + id);
             this.checkForInvite();
         });
+
         this.peer.on('connection', (c) => {
             this.handleConnection(c);
             showToast("Friend Connected!");
             this.activateUI();
-            if (this.isHost) setTimeout(() => this.callGuest(c.peer), 1000); 
+            if (this.isHost) {
+                setTimeout(() => this.callGuest(c.peer), 1000); 
+            }
         });
+
         this.peer.on('call', (call) => {
+            console.log("Receiving call...");
             call.answer(); 
             call.on('stream', (remoteStream) => {
                 remoteVideo.srcObject = remoteStream;
@@ -86,59 +91,69 @@ const coShop = {
                 showToast("Watching Host Live");
             });
         });
+
         this.peer.on('error', (err) => console.error(err));
     },
 
     checkForInvite: function() {
         const urlParams = new URLSearchParams(window.location.search);
         const roomId = urlParams.get('room');
-        if (roomId) { 
+        if (roomId) {
             this.isHost = false; 
-            this.connectToHost(roomId); 
-        } else { 
-            this.isHost = true; 
+            this.connectToHost(roomId);
+        } else {
+            this.isHost = true;
             document.body.classList.add('hosting'); 
         }
     },
 
     connectToHost: function(hostId) {
         this.conn = this.peer.connect(hostId);
-        this.conn.on('open', () => { showToast("Connected! Waiting for video..."); this.activateUI(); });
+        this.conn.on('open', () => {
+            showToast("Connected! Waiting for video...");
+            this.activateUI();
+        });
         this.setupDataListener();
     },
 
-    handleConnection: function(c) { this.conn = c; this.setupDataListener(); },
-    
-    // Stream AR Canvas to Guest
-    callGuest: function(guestId) { 
-        const stream = canvasElement.captureStream(30); 
-        this.peer.call(guestId, stream); 
+    handleConnection: function(c) {
+        this.conn = c;
+        this.setupDataListener();
+    },
+
+    callGuest: function(guestId) {
+        const stream = canvasElement.captureStream(30);
+        const call = this.peer.call(guestId, stream);
+    },
+
+    setupDataListener: function() {
+        this.conn.on('data', (data) => {
+            if (data.type === 'VOTE') { showReaction(data.val); }
+        });
+    },
+
+    sendUpdate: function(category, index) {
+        if (this.conn && this.conn.open) {
+            this.conn.send({ type: 'SYNC_ITEM', cat: category, idx: index });
+        }
+    },
+
+    sendVote: function(val) {
+        if (this.conn && this.conn.open) {
+            this.conn.send({ type: 'VOTE', val: val });
+            showReaction(val); 
+        }
     },
     
-    setupDataListener: function() { this.conn.on('data', (data) => { if (data.type === 'VOTE') showReaction(data.val); }); },
-    
-    sendUpdate: function(category, index) { if (this.conn && this.conn.open) this.conn.send({ type: 'SYNC_ITEM', cat: category, idx: index }); },
-    
-    sendVote: function(val) { if (this.conn && this.conn.open) { this.conn.send({ type: 'VOTE', val: val }); showReaction(val); } },
-    
-    activateUI: function() { this.active = true; document.getElementById('voting-ui').style.display = 'flex'; document.getElementById('coshop-btn').style.color = '#00ff00'; }
+    activateUI: function() {
+        this.active = true;
+        document.getElementById('voting-ui').style.display = 'flex';
+        document.getElementById('coshop-btn').style.color = '#00ff00';
+    }
 };
 
-/* --- HELPER: LERP & NAVIGATION --- */
+/* --- HELPER: LERP --- */
 function lerp(start, end, amt) { return (1 - amt) * start + amt * end; }
-
-// Change Item via Gesture or Click
-function changeItem(direction) {
-    const assets = JEWELRY_ASSETS[currentType];
-    if (!assets || assets.length === 0) return;
-    
-    let newIndex = currentAssetIndex + direction;
-    if (newIndex < 0) newIndex = assets.length - 1;
-    if (newIndex >= assets.length) newIndex = 0;
-    
-    applyAssetInstantly(assets[newIndex], newIndex, true);
-    showToast(direction > 0 ? "Next Design" : "Previous Design");
-}
 
 /* --- DAILY DROP --- */
 function checkDailyDrop() {
@@ -171,7 +186,7 @@ function updatePhysics(headTilt, headX, width) {
     if (physics.swayOffset < -0.5) physics.swayOffset = -0.5;
 }
 
-/* --- ASSET MANAGEMENT --- */
+/* --- BACKGROUND FETCHING (FIXED URL LOGIC) --- */
 function initBackgroundFetch() { Object.keys(DRIVE_FOLDERS).forEach(key => { fetchCategoryData(key); }); }
 function fetchCategoryData(category) {
     if (CATALOG_PROMISES[category]) return CATALOG_PROMISES[category];
@@ -187,10 +202,12 @@ function fetchCategoryData(category) {
             JEWELRY_ASSETS[category] = data.files.map(file => {
                 const baseLink = file.thumbnailLink;
                 let thumbSrc, fullSrc;
+                // FIX: Better fallback logic ensures images always load
                 if (baseLink) {
                     thumbSrc = baseLink.replace(/=s\d+$/, "=s400");
                     fullSrc = baseLink.replace(/=s\d+$/, "=s3000");
                 } else {
+                    // Fallback to direct ID links if thumbnailLink is missing
                     thumbSrc = `https://drive.google.com/thumbnail?id=${file.id}`;
                     fullSrc = `https://drive.google.com/uc?export=view&id=${file.id}`;
                 }
@@ -205,6 +222,7 @@ function fetchCategoryData(category) {
     return fetchPromise;
 }
 
+/* --- ASSET LOADING --- */
 function loadAsset(src, id) {
     return new Promise((resolve) => {
         if (!src) { resolve(null); return; }
@@ -222,7 +240,7 @@ function setActiveARImage(img) {
     else if (currentType === 'bangles') bangleImg = img;
 }
 
-/* --- INIT & SELECTION --- */
+/* --- INITIALIZATION --- */
 window.onload = async () => {
     initBackgroundFetch();
     coShop.init(); 
@@ -231,6 +249,7 @@ window.onload = async () => {
     await selectJewelryType('earrings');
 };
 
+/* --- SELECTION LOGIC (FIX: RESTORE VISIBILITY) --- */
 async function selectJewelryType(type) {
   if (currentType === type) return;
   currentType = type;
@@ -245,7 +264,7 @@ async function selectJewelryType(type) {
   if (!assets) assets = await fetchCategoryData(type);
   if (!assets || assets.length === 0) return;
 
-  // FIX: Ensure carousel is visible
+  // FIX: Make the carousel visible!
   container.style.display = 'flex';
 
   const fragment = document.createDocumentFragment();
@@ -277,52 +296,24 @@ function highlightButtonByIndex(index) {
     }
 }
 
-/* --- CAMERA & LOOP --- */
+/* --- CAMERA & RENDER LOOPS --- */
 async function startCameraFast(mode = 'user') {
-    // Guest Safety
-    if (!coShop.isHost && coShop.active) return;
+    if (!coShop.isHost && coShop.active) return; // Guest doesn't need cam
     if (videoElement.srcObject && currentCameraMode === mode && videoElement.readyState >= 2) return;
-    
     currentCameraMode = mode;
     if (videoElement.srcObject) { videoElement.srcObject.getTracks().forEach(track => track.stop()); }
-    
     if (mode === 'environment') { videoElement.classList.add('no-mirror'); } else { videoElement.classList.remove('no-mirror'); }
-    
-    const constraints = { 
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: mode },
-        audio: false 
-    };
-
     try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: mode } });
         videoElement.srcObject = stream;
         videoElement.onloadeddata = () => { videoElement.play(); detectLoop(); };
-    } catch (err) { 
-        console.error("Camera Error:", err); 
-        alert("Camera access denied or unavailable. Please use HTTPS.");
-    }
+    } catch (err) { console.error("Camera Error", err); }
 }
 
 async function detectLoop() {
-    // If watching remote stream, pause local detection
-    if (remoteVideo.style.display === 'block') return;
-
-    if (videoElement.readyState >= 2) {
-        const w = videoElement.videoWidth; const h = videoElement.videoHeight;
-        canvasElement.width = w; canvasElement.height = h;
-
-        // FIX: Always draw video first. This prevents black screen if AI is slow.
-        canvasCtx.save();
-        if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
-        else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
-        canvasCtx.drawImage(videoElement, 0, 0, w, h);
-        canvasCtx.restore();
-
-        // Run AI
-        try {
-            if (!isProcessingFace) { isProcessingFace = true; await faceMesh.send({image: videoElement}); isProcessingFace = false; }
-            if (!isProcessingHand) { isProcessingHand = true; await hands.send({image: videoElement}); isProcessingHand = false; }
-        } catch(e) { console.warn(e); }
+    if (videoElement.readyState >= 2 && !remoteVideo.srcObject) { 
+        if (!isProcessingFace) { isProcessingFace = true; await faceMesh.send({image: videoElement}); isProcessingFace = false; }
+        if (!isProcessingHand) { isProcessingHand = true; await hands.send({image: videoElement}); isProcessingHand = false; }
     }
     requestAnimationFrame(detectLoop);
 }
@@ -333,12 +324,11 @@ faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5, minTra
 faceMesh.onResults((results) => {
   if (currentType !== 'earrings' && currentType !== 'chains') return;
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
-  
+  canvasElement.width = w; canvasElement.height = h;
   canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
-  
-  // Note: Video is already drawn in detectLoop, we just draw AR on top here
+  canvasCtx.drawImage(videoElement, 0, 0, w, h);
   if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
     const lm = results.multiFaceLandmarks[0]; 
     const leftEar = { x: lm[132].x * w, y: lm[132].y * h }; const rightEar = { x: lm[361].x * w, y: lm[361].y * h };
@@ -365,50 +355,26 @@ faceMesh.onResults((results) => {
   canvasCtx.restore();
 });
 
-/* --- MEDIAPIPE HANDS & GESTURE LOGIC --- */
+/* --- MEDIAPIPE HANDS --- */
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 function calculateAngle(p1, p2) { return Math.atan2(p2.y - p1.y, p2.x - p1.x); }
-
 hands.onResults((results) => {
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
   if (currentType !== 'rings' && currentType !== 'bangles') return;
-  
+  canvasElement.width = w; canvasElement.height = h;
   canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
-
+  canvasCtx.drawImage(videoElement, 0, 0, w, h);
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const lm = results.multiHandLandmarks[0];
-      
-      /* --- SWIPE GESTURE DETECTION --- */
-      if (!autoTryRunning) {
-          const now = Date.now();
-          if (now - lastGestureTime > GESTURE_COOLDOWN) {
-              const indexTip = lm[8]; // Track Index Finger Tip
-              if (previousHandX !== null) {
-                  const diff = indexTip.x - previousHandX;
-                  // Sensitivity Threshold: 0.04
-                  if (Math.abs(diff) > 0.04) { 
-                      changeItem(diff < 0 ? 1 : -1); 
-                      lastGestureTime = now; 
-                      previousHandX = null; 
-                  }
-              }
-              if (now - lastGestureTime > 100) previousHandX = indexTip.x;
-          }
-      } else {
-          previousHandX = null;
-      }
-      /* -------------------------------- */
-
       const mcp = { x: lm[13].x * w, y: lm[13].y * h }; const pip = { x: lm[14].x * w, y: lm[14].y * h };
       const targetRingAngle = calculateAngle(mcp, pip) - (Math.PI / 2);
       const targetRingWidth = Math.hypot(pip.x - mcp.x, pip.y - mcp.y) * 0.6; 
       const wrist = { x: lm[0].x * w, y: lm[0].y * h }; 
       const targetArmAngle = calculateAngle(wrist, { x: lm[9].x * w, y: lm[9].y * h }) - (Math.PI / 2);
       const targetBangleWidth = Math.hypot((lm[17].x*w)-(lm[5].x*w), (lm[17].y*h)-(lm[5].y*h)) * 1.25; 
-      
       if (!handSmoother.active) {
           handSmoother.ring = { x: mcp.x, y: mcp.y, angle: targetRingAngle, size: targetRingWidth };
           handSmoother.bangle = { x: wrist.x, y: wrist.y, angle: targetArmAngle, size: targetBangleWidth };
@@ -467,4 +433,14 @@ function toggleTryAll() { if (!currentType) { alert("Select category!"); return;
 function startAutoTry() { autoTryRunning = true; autoSnapshots = []; autoTryIndex = 0; document.getElementById('tryall-btn').textContent = "STOP"; runAutoStep(); }
 function stopAutoTry() { autoTryRunning = false; clearTimeout(autoTryTimeout); document.getElementById('tryall-btn').textContent = "Try All"; if (autoSnapshots.length > 0) showGallery(); }
 async function runAutoStep() { if (!autoTryRunning) return; const assets = JEWELRY_ASSETS[currentType]; if (!assets || autoTryIndex >= assets.length) { stopAutoTry(); return; } const asset = assets[autoTryIndex]; const highResImg = await loadAsset(asset.fullSrc, asset.id); setActiveARImage(highResImg); currentAssetName = asset.name; autoTryTimeout = setTimeout(() => { triggerFlash(); captureToGallery(); autoTryIndex++; runAutoStep(); }, 1500); }
-function captureToGallery() { const tempCanvas = document.createElement('canvas'); tempCanvas.width = videoElement.videoWidth; tempCanvas.height = videoElement.videoHeight; const tempCtx = tempCanvas.getContext('2d'); if (currentCameraMode === 'environment') { tempCtx.translate(0, 0); tempCtx.scale(1, 1); } else { tempCtx.translate(tempCanvas.width, 0); tempCtx.scale(-1, 1); } tempCtx.drawImage(videoElement, 0, 0); tempCtx.setTransform(1, 0, 0, 1, 0, 0); try { tempCtx.drawImage(canvasElement, 0, 0); } catch(e) {} let cleanName = currentAssetName.replace(/\.(png|jpg|jpeg|webp)$/i, "").replace(/_/g, " "); cleanName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1); const padding = tempCanvas.width * 0.04; const titleSize = tempCanvas.width * 0.045; const descSize = tempCanvas.width * 0.035; const contentHeight = (titleSize * 2) + descSize + padding; const gradient = tempCtx.createLinearGradient(0, tempCanvas.height - contentHeight - padding, 0, tempCanvas.height); gradient.addColorStop(0, "rgba(0,0,0,0)"); gradient.addColorStop(0.2, "rgba(0,0,0,0.8)"); gradient.addColorStop(1, "rgba(0,0,0,0.95)"); tempCtx.fillStyle = gradient; tempCtx.fillRect(0, tempCanvas.height - contentHeight - padding, tempCanvas.width, contentHeight + padding); tempCtx.font = `bold ${titleSize}px Playfair Display, serif`; tempCtx.fillStyle = "#d4af37"; tempCtx.textAlign = "left"; tempCtx.textBaseline = "top"; tempCtx.fillText("Product Description", padding, tempCanvas.height - contentHeight); tempCtx.font = `${descSize}px Montserrat, sans-serif`; tempCtx.fillStyle = "#ffffff"; tempCtx.fillText(cleanName, padding, tempCanvas.height - contentHeight + (titleSize * 1.5)); if (watermarkImg.complete) { const wWidth = tempCanvas.width * 0.25; const wHeight = (watermarkImg.height / watermarkImg.width) * wWidth; tempCtx.drawImage(watermarkImg, tempCanvas.width - wWidth - padding, padding, wWidth, wHeight); } const dataUrl = tempCanvas.toDataURL('
+function captureToGallery() { const tempCanvas = document.createElement('canvas'); tempCanvas.width = videoElement.videoWidth; tempCanvas.height = videoElement.videoHeight; const tempCtx = tempCanvas.getContext('2d'); if (currentCameraMode === 'environment') { tempCtx.translate(0, 0); tempCtx.scale(1, 1); } else { tempCtx.translate(tempCanvas.width, 0); tempCtx.scale(-1, 1); } tempCtx.drawImage(videoElement, 0, 0); tempCtx.setTransform(1, 0, 0, 1, 0, 0); try { tempCtx.drawImage(canvasElement, 0, 0); } catch(e) {} let cleanName = currentAssetName.replace(/\.(png|jpg|jpeg|webp)$/i, "").replace(/_/g, " "); cleanName = cleanName.charAt(0).toUpperCase() + cleanName.slice(1); const padding = tempCanvas.width * 0.04; const titleSize = tempCanvas.width * 0.045; const descSize = tempCanvas.width * 0.035; const contentHeight = (titleSize * 2) + descSize + padding; const gradient = tempCtx.createLinearGradient(0, tempCanvas.height - contentHeight - padding, 0, tempCanvas.height); gradient.addColorStop(0, "rgba(0,0,0,0)"); gradient.addColorStop(0.2, "rgba(0,0,0,0.8)"); gradient.addColorStop(1, "rgba(0,0,0,0.95)"); tempCtx.fillStyle = gradient; tempCtx.fillRect(0, tempCanvas.height - contentHeight - padding, tempCanvas.width, contentHeight + padding); tempCtx.font = `bold ${titleSize}px Playfair Display, serif`; tempCtx.fillStyle = "#d4af37"; tempCtx.textAlign = "left"; tempCtx.textBaseline = "top"; tempCtx.fillText("Product Description", padding, tempCanvas.height - contentHeight); tempCtx.font = `${descSize}px Montserrat, sans-serif`; tempCtx.fillStyle = "#ffffff"; tempCtx.fillText(cleanName, padding, tempCanvas.height - contentHeight + (titleSize * 1.5)); if (watermarkImg.complete) { const wWidth = tempCanvas.width * 0.25; const wHeight = (watermarkImg.height / watermarkImg.width) * wWidth; tempCtx.drawImage(watermarkImg, tempCanvas.width - wWidth - padding, padding, wWidth, wHeight); } const dataUrl = tempCanvas.toDataURL('image/png'); const safeName = "Jewels_Look"; autoSnapshots.push({ url: dataUrl, name: `${safeName}_${Date.now()}.png` }); return { url: dataUrl, name: `${safeName}_${Date.now()}.png` }; }
+function takeSnapshot() { triggerFlash(); const shotData = captureToGallery(); currentPreviewData = shotData; document.getElementById('preview-image').src = shotData.url; document.getElementById('preview-modal').style.display = 'flex'; }
+function downloadSingleSnapshot() { if(!currentPreviewData.url) return; saveAs(currentPreviewData.url, currentPreviewData.name); }
+function downloadAllAsZip() { if (autoSnapshots.length === 0) return; const zip = new JSZip(); const folder = zip.folder("Jewels-Ai_Collection"); autoSnapshots.forEach(item => folder.file(item.name, item.url.replace(/^data:image\/(png|jpg);base64,/, ""), {base64:true})); zip.generateAsync({type:"blob"}).then(content => saveAs(content, "Jewels-Ai_Collection.zip")); }
+function shareSingleSnapshot() { if(!currentPreviewData.url) return; fetch(currentPreviewData.url).then(res => res.blob()).then(blob => { const file = new File([blob], "look.png", { type: "image/png" }); if (navigator.share) navigator.share({ files: [file] }); }); }
+function changeLightboxImage(dir) { if (autoSnapshots.length === 0) return; currentLightboxIndex = (currentLightboxIndex + dir + autoSnapshots.length) % autoSnapshots.length; document.getElementById('lightbox-image').src = autoSnapshots[currentLightboxIndex].url; }
+function showGallery() { const grid = document.getElementById('gallery-grid'); grid.innerHTML = ''; autoSnapshots.forEach((item, index) => { const card = document.createElement('div'); card.className = "gallery-card"; const img = document.createElement('img'); img.src = item.url; img.className = "gallery-img"; const overlay = document.createElement('div'); overlay.className = "gallery-overlay"; let cleanName = item.name.replace("Jewels-Ai_", "").replace(".png", "").substring(0,12); overlay.innerHTML = `<span class="overlay-text">${cleanName}</span><div class="overlay-icon">👁️</div>`; card.onclick = () => { currentLightboxIndex = index; document.getElementById('lightbox-image').src = item.url; document.getElementById('lightbox-overlay').style.display = 'flex'; }; card.appendChild(img); card.appendChild(overlay); grid.appendChild(card); }); document.getElementById('gallery-modal').style.display = 'flex'; }
+function closePreview() { document.getElementById('preview-modal').style.display = 'none'; }
+function closeGallery() { document.getElementById('gallery-modal').style.display = 'none'; }
+function closeLightbox() { document.getElementById('lightbox-overlay').style.display = 'none'; }
+function showReaction(type) { const container = document.getElementById('reaction-container'); const el = document.createElement('div'); el.innerText = type === 'love' ? '❤️' : '👎'; el.className = 'floating-reaction'; el.style.left = Math.random() * 80 + 10 + '%'; container.appendChild(el); setTimeout(() => el.remove(), 2000); }
