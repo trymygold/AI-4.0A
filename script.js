@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: v6.0 (Added Hand Gestures) */
+/* script.js - Jewels-Ai Atelier: v7.0 (Swipe Gestures Added) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -35,9 +35,10 @@ let isProcessingHand = false, isProcessingFace = false;
 let currentAssetName = "Select a Design"; 
 let currentAssetIndex = 0; 
 
-/* Gesture State (NEW) */
-let lastGestureTime = 0;
-const GESTURE_COOLDOWN = 2000; // 2 seconds between actions
+/* --- NEW SWIPE STATE --- */
+let lastWristX = 0;
+let swipeCooldown = 0;
+const SWIPE_THRESHOLD = 0.08; // Sensitivity: Higher = faster swipe needed
 
 /* Physics State */
 let physics = { earringAngle: 0, earringVelocity: 0, swayOffset: 0, lastHeadX: 0 };
@@ -254,7 +255,6 @@ window.onload = async () => {
 /* --- SELECTION LOGIC --- */
 async function selectJewelryType(type) {
   if (currentType === type && type !== undefined) return;
-  // If undefined, it acts as a "next" trigger if called programmatically, but here we set explicitly
   currentType = type;
   
   const targetMode = (type === 'rings' || type === 'bangles') ? 'environment' : 'user';
@@ -358,7 +358,7 @@ faceMesh.onResults((results) => {
   canvasCtx.restore();
 });
 
-/* --- MEDIAPIPE HANDS (UPDATED WITH GESTURES) --- */
+/* --- MEDIAPIPE HANDS (UPDATED WITH SWIPE) --- */
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 
@@ -373,7 +373,6 @@ hands.onResults((results) => {
   }
 
   // 2. If we are NOT in Ring/Bangle mode, Stop Drawing.
-  // (We don't want to draw over the FaceMesh results)
   if (currentType !== 'rings' && currentType !== 'bangles') return;
 
   // 3. Draw Camera & Hands (Only for Ring/Bangle modes)
@@ -420,42 +419,50 @@ hands.onResults((results) => {
   canvasCtx.restore();
 });
 
-/* --- GESTURE LOGIC (NEW) --- */
+/* --- NEW GESTURE LOGIC: SWIPE DETECTION --- */
 function detectGestureAction(lm) {
     const now = Date.now();
-    if (now - lastGestureTime < GESTURE_COOLDOWN) return;
+    // 1. Cooldown Check (Don't swipe twice in 500ms)
+    if (now - swipeCooldown < 500) return;
 
-    // Logic: Y-coordinate 0 is top. Smaller Y means higher on screen.
-    const isThumbUp = lm[4].y < lm[3].y && lm[4].y < lm[2].y;
-    // Check if other fingers are curled (Tip Y > Pip Y)
-    const isIndexCurled = lm[8].y > lm[6].y;
-    const isMiddleCurled = lm[12].y > lm[10].y;
-    const isRingCurled = lm[16].y > lm[14].y;
-    const isPinkyCurled = lm[20].y > lm[18].y;
+    // 2. Get Wrist Position (0.0 to 1.0)
+    const currentWristX = lm[0].x;
 
-    // 1. THUMBS UP -> Snapshot
-    if (isThumbUp && isIndexCurled && isMiddleCurled && isRingCurled && isPinkyCurled) {
-        console.log("Gesture: Thumbs Up");
-        showToast("👍 Snapshot Taken!");
-        takeSnapshot();
-        lastGestureTime = now;
-        return;
-    }
+    // 3. Calculate Velocity (Change in position since last frame)
+    if (lastWristX !== 0) {
+        const diff = currentWristX - lastWristX;
 
-    // 2. OPEN HAND -> Next Category (All fingers extended)
-    // Thumb is usually to the side, but ensure others are strictly straight up/extended
-    if (!isIndexCurled && !isMiddleCurled && !isRingCurled && !isPinkyCurled && !isThumbUp) {
-        console.log("Gesture: Open Hand");
-        showToast("✋ Cycling Category...");
+        // SWIPE LEFT (Visual Move Left) -> Previous Product
+        // Logic: Moving Left decreases X in many contexts, or increases in others depending on mirror.
+        // Adjusted for standard MediaPipe/Canvas mirror logic:
+        // A distinct movement towards one side triggers the change.
         
-        // Cycle Logic
-        if(currentType === 'earrings') selectJewelryType('chains');
-        else if(currentType === 'chains') selectJewelryType('rings');
-        else if(currentType === 'rings') selectJewelryType('bangles');
-        else selectJewelryType('earrings');
-        
-        lastGestureTime = now;
+        if (diff > SWIPE_THRESHOLD) { 
+            // Moving one way
+            console.log("Gesture: Swipe (Direction A)");
+            showToast("⬅️ Previous Look");
+            changeProduct(-1);
+            swipeCooldown = now;
+        }
+
+        if (diff < -SWIPE_THRESHOLD) { 
+            // Moving other way
+            console.log("Gesture: Swipe (Direction B)");
+            showToast("➡️ Next Look");
+            changeProduct(1);
+            swipeCooldown = now;
+        }
     }
+    lastWristX = currentWristX;
+}
+
+function changeProduct(direction) {
+    if (!JEWELRY_ASSETS[currentType] || JEWELRY_ASSETS[currentType].length === 0) return;
+    const list = JEWELRY_ASSETS[currentType];
+    let newIndex = currentAssetIndex + direction;
+    if (newIndex >= list.length) newIndex = 0;
+    if (newIndex < 0) newIndex = list.length - 1;
+    applyAssetInstantly(list[newIndex], newIndex, true);
 }
 
 /* --- UTILS --- */
