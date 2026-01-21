@@ -1,4 +1,4 @@
-/* script.js - Jewels-Ai Atelier: v5.2 (Fix: Carousel & Hosting) */
+/* script.js - Jewels-Ai Atelier: v6.0 (Added Hand Gestures) */
 
 /* --- CONFIGURATION --- */
 const API_KEY = "AIzaSyAXG3iG2oQjUA_BpnO8dK8y-MHJ7HLrhyE"; 
@@ -34,6 +34,10 @@ let isProcessingHand = false, isProcessingFace = false;
 /* Tracking Variables */
 let currentAssetName = "Select a Design"; 
 let currentAssetIndex = 0; 
+
+/* Gesture State (NEW) */
+let lastGestureTime = 0;
+const GESTURE_COOLDOWN = 2000; // 2 seconds between actions
 
 /* Physics State */
 let physics = { earringAngle: 0, earringVelocity: 0, swayOffset: 0, lastHeadX: 0 };
@@ -186,7 +190,7 @@ function updatePhysics(headTilt, headX, width) {
     if (physics.swayOffset < -0.5) physics.swayOffset = -0.5;
 }
 
-/* --- BACKGROUND FETCHING (FIXED URL LOGIC) --- */
+/* --- BACKGROUND FETCHING --- */
 function initBackgroundFetch() { Object.keys(DRIVE_FOLDERS).forEach(key => { fetchCategoryData(key); }); }
 function fetchCategoryData(category) {
     if (CATALOG_PROMISES[category]) return CATALOG_PROMISES[category];
@@ -202,12 +206,10 @@ function fetchCategoryData(category) {
             JEWELRY_ASSETS[category] = data.files.map(file => {
                 const baseLink = file.thumbnailLink;
                 let thumbSrc, fullSrc;
-                // FIX: Better fallback logic ensures images always load
                 if (baseLink) {
                     thumbSrc = baseLink.replace(/=s\d+$/, "=s400");
                     fullSrc = baseLink.replace(/=s\d+$/, "=s3000");
                 } else {
-                    // Fallback to direct ID links if thumbnailLink is missing
                     thumbSrc = `https://drive.google.com/thumbnail?id=${file.id}`;
                     fullSrc = `https://drive.google.com/uc?export=view&id=${file.id}`;
                 }
@@ -249,10 +251,12 @@ window.onload = async () => {
     await selectJewelryType('earrings');
 };
 
-/* --- SELECTION LOGIC (FIX: RESTORE VISIBILITY) --- */
+/* --- SELECTION LOGIC --- */
 async function selectJewelryType(type) {
-  if (currentType === type) return;
+  if (currentType === type && type !== undefined) return;
+  // If undefined, it acts as a "next" trigger if called programmatically, but here we set explicitly
   currentType = type;
+  
   const targetMode = (type === 'rings' || type === 'bangles') ? 'environment' : 'user';
   startCameraFast(targetMode); 
   
@@ -264,7 +268,6 @@ async function selectJewelryType(type) {
   if (!assets) assets = await fetchCategoryData(type);
   if (!assets || assets.length === 0) return;
 
-  // FIX: Make the carousel visible!
   container.style.display = 'flex';
 
   const fragment = document.createDocumentFragment();
@@ -355,18 +358,31 @@ faceMesh.onResults((results) => {
   canvasCtx.restore();
 });
 
-/* --- MEDIAPIPE HANDS --- */
+/* --- MEDIAPIPE HANDS (UPDATED WITH GESTURES) --- */
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
 function calculateAngle(p1, p2) { return Math.atan2(p2.y - p1.y, p2.x - p1.x); }
+
 hands.onResults((results) => {
   const w = videoElement.videoWidth; const h = videoElement.videoHeight;
+  
+  // 1. Detect Gestures FIRST (Available in all modes)
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      detectGestureAction(results.multiHandLandmarks[0]);
+  }
+
+  // 2. If we are NOT in Ring/Bangle mode, Stop Drawing.
+  // (We don't want to draw over the FaceMesh results)
   if (currentType !== 'rings' && currentType !== 'bangles') return;
+
+  // 3. Draw Camera & Hands (Only for Ring/Bangle modes)
   canvasElement.width = w; canvasElement.height = h;
   canvasCtx.save();
   if (currentCameraMode === 'environment') { canvasCtx.translate(0, 0); canvasCtx.scale(1, 1); } 
   else { canvasCtx.translate(w, 0); canvasCtx.scale(-1, 1); }
   canvasCtx.drawImage(videoElement, 0, 0, w, h);
+
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       const lm = results.multiHandLandmarks[0];
       const mcp = { x: lm[13].x * w, y: lm[13].y * h }; const pip = { x: lm[14].x * w, y: lm[14].y * h };
@@ -375,6 +391,7 @@ hands.onResults((results) => {
       const wrist = { x: lm[0].x * w, y: lm[0].y * h }; 
       const targetArmAngle = calculateAngle(wrist, { x: lm[9].x * w, y: lm[9].y * h }) - (Math.PI / 2);
       const targetBangleWidth = Math.hypot((lm[17].x*w)-(lm[5].x*w), (lm[17].y*h)-(lm[5].y*h)) * 1.25; 
+      
       if (!handSmoother.active) {
           handSmoother.ring = { x: mcp.x, y: mcp.y, angle: targetRingAngle, size: targetRingWidth };
           handSmoother.bangle = { x: wrist.x, y: wrist.y, angle: targetArmAngle, size: targetBangleWidth };
@@ -402,6 +419,44 @@ hands.onResults((results) => {
   }
   canvasCtx.restore();
 });
+
+/* --- GESTURE LOGIC (NEW) --- */
+function detectGestureAction(lm) {
+    const now = Date.now();
+    if (now - lastGestureTime < GESTURE_COOLDOWN) return;
+
+    // Logic: Y-coordinate 0 is top. Smaller Y means higher on screen.
+    const isThumbUp = lm[4].y < lm[3].y && lm[4].y < lm[2].y;
+    // Check if other fingers are curled (Tip Y > Pip Y)
+    const isIndexCurled = lm[8].y > lm[6].y;
+    const isMiddleCurled = lm[12].y > lm[10].y;
+    const isRingCurled = lm[16].y > lm[14].y;
+    const isPinkyCurled = lm[20].y > lm[18].y;
+
+    // 1. THUMBS UP -> Snapshot
+    if (isThumbUp && isIndexCurled && isMiddleCurled && isRingCurled && isPinkyCurled) {
+        console.log("Gesture: Thumbs Up");
+        showToast("👍 Snapshot Taken!");
+        takeSnapshot();
+        lastGestureTime = now;
+        return;
+    }
+
+    // 2. OPEN HAND -> Next Category (All fingers extended)
+    // Thumb is usually to the side, but ensure others are strictly straight up/extended
+    if (!isIndexCurled && !isMiddleCurled && !isRingCurled && !isPinkyCurled && !isThumbUp) {
+        console.log("Gesture: Open Hand");
+        showToast("✋ Cycling Category...");
+        
+        // Cycle Logic
+        if(currentType === 'earrings') selectJewelryType('chains');
+        else if(currentType === 'chains') selectJewelryType('rings');
+        else if(currentType === 'rings') selectJewelryType('bangles');
+        else selectJewelryType('earrings');
+        
+        lastGestureTime = now;
+    }
+}
 
 /* --- UTILS --- */
 window.selectJewelryType = selectJewelryType; 
