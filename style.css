@@ -1,4 +1,4 @@
-/* style.css - Jewels-Ai Atelier: v6.2 (Camera Visibility Fixed) */
+/* style.css - Jewels-Ai Atelier: v6.3 (Camera Visibility Fixed) */
 
 /* Import Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Montserrat:wght@400;600&display=swap');
@@ -51,9 +51,6 @@ body {
     display: none; /* Hidden unless receiving stream */
     transform: scaleX(1); /* Remote stream is usually not mirrored */
 }
-
-/* DELETED: body.hosting #webcam { opacity: 0; } 
-   We removed this to prevent the "Black Screen" issue. */
 
 /* Loading Status Indicator */
 #loading-status {
