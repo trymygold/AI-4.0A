@@ -16,16 +16,45 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 
   <style>
-    /* Toast Notification Style */
+    /* Toast Notification Style - MOVED TO TOP */
     #toast-notification {
-      visibility: hidden; min-width: 250px; background-color: #333; color: #d4af37;
-      text-align: center; border-radius: 4px; padding: 16px; position: fixed;
-      z-index: 9999; left: 50%; bottom: 30px; transform: translateX(-50%);
-      font-size: 17px; font-family: 'Montserrat', sans-serif; border: 1px solid #d4af37;
+      visibility: hidden; 
+      min-width: 250px; 
+      background-color: #333; 
+      color: #d4af37;
+      text-align: center; 
+      border-radius: 4px; 
+      padding: 16px; 
+      position: fixed;
+      z-index: 9999; 
+      left: 50%; 
+      
+      /* Position at Top */
+      top: 100px; 
+      bottom: auto; 
+      
+      transform: translateX(-50%);
+      font-size: 17px; 
+      font-family: 'Montserrat', sans-serif; 
+      border: 1px solid #d4af37;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
     }
-    #toast-notification.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
-    @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
-    @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+
+    #toast-notification.show { 
+      visibility: visible; 
+      animation: fadein 0.5s, fadeout 0.5s 2.5s; 
+    }
+
+    /* Animation slides down from Top */
+    @keyframes fadein { 
+      from {top: 0; opacity: 0;} 
+      to {top: 100px; opacity: 1;} 
+    }
+
+    @keyframes fadeout { 
+      from {top: 100px; opacity: 1;} 
+      to {top: 0; opacity: 0;} 
+    }
 
     /* Modal Overlay Base */
     .modal-overlay {
